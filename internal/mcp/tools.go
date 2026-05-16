@@ -10,6 +10,7 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/brainer.sh/atlas/internal/search"
 	"github.com/brainer.sh/atlas/internal/storage"
 	"github.com/brainer.sh/atlas/internal/tools"
 )
@@ -131,10 +132,19 @@ func openStoreForRepo(repoPath string) (*storage.Store, string, error) {
 }
 
 func handleSearch(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	return jsonResult(map[string]any{
-		"query":   req.GetString("query", ""),
-		"results": []any{},
-	})
+	query := req.GetString("query", "")
+	if query == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	atlasDir, err := atlasDataDir()
+	if err != nil {
+		return nil, err
+	}
+	result, err := search.Search(atlasDir, query)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: search: %w", err)
+	}
+	return jsonResult(result)
 }
 
 func handleExplore(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
