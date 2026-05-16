@@ -148,13 +148,28 @@ func handleSearch(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallTo
 }
 
 func handleExplore(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	return jsonResult(map[string]any{
-		"symbol":  req.GetString("symbol", ""),
-		"kind":    "",
-		"file":    "",
-		"callers": []string{},
-		"callees": []string{},
-	})
+	symbol := req.GetString("symbol", "")
+	if symbol == "" {
+		return nil, fmt.Errorf("symbol is required")
+	}
+	atlasDir, err := atlasDataDir()
+	if err != nil {
+		return nil, err
+	}
+	result, err := tools.ExploreSymbol(atlasDir, symbol)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: explore: %w", err)
+	}
+	if result == nil {
+		return jsonResult(map[string]any{
+			"symbol":  symbol,
+			"kind":    "",
+			"file":    "",
+			"callers": []string{},
+			"callees": []string{},
+		})
+	}
+	return jsonResult(result)
 }
 
 func handleGetMap(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
