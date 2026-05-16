@@ -6,6 +6,7 @@ require (
 	github.com/mark3labs/mcp-go v0.54.0
 	github.com/tree-sitter/go-tree-sitter v0.25.0
 	github.com/tree-sitter/tree-sitter-go v0.25.0
+	zombiezen.com/go/sqlite v1.4.2
 )
 
 require (
@@ -26,5 +27,4 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.37.1 // indirect
-	zombiezen.com/go/sqlite v1.4.2 // indirect
 )
