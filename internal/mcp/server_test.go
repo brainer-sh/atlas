@@ -3,10 +3,17 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
+
+func fixtureDir() string {
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(file), "..", "..", "testdata", "go", "simple")
+}
 
 func TestNew(t *testing.T) {
 	s := New()
@@ -27,13 +34,13 @@ func TestHandlers(t *testing.T) {
 		{
 			name:    "index_repo",
 			handler: handleIndexRepo,
-			args:    map[string]any{"path": "/tmp/repo"},
+			args:    map[string]any{"path": fixtureDir()},
 			wantKey: "files_indexed",
 		},
 		{
 			name:    "reindex",
 			handler: handleReindex,
-			args:    map[string]any{"path": "/tmp/repo"},
+			args:    map[string]any{"path": fixtureDir()},
 			wantKey: "files_indexed",
 		},
 		{

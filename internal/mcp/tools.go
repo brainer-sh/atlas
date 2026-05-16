@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+
+	"github.com/brainer.sh/atlas/internal/storage"
+	"github.com/brainer.sh/atlas/internal/tools"
 )
 
 func registerTools(s *mcpserver.MCPServer) {
@@ -63,23 +68,70 @@ func jsonResult(v any) (*mcplib.CallToolResult, error) {
 }
 
 func handleIndexRepo(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	path := req.GetString("path", "")
+	if path == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+	store, dbPath, err := openStoreForRepo(path)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	_ = dbPath
+
+	result, err := tools.IndexRepo(path, store)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: index_repo: %w", err)
+	}
 	return jsonResult(map[string]any{
-		"repo":            "",
-		"path":            req.GetString("path", ""),
-		"files_indexed":   0,
-		"symbols_indexed": 0,
-		"duration_ms":     0,
+		"repo":            result.Repo,
+		"path":            result.Path,
+		"files_indexed":   result.FilesIndexed,
+		"symbols_indexed": result.SymbolsIndexed,
+		"duration_ms":     result.DurationMs,
 	})
 }
 
 func handleReindex(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	path := req.GetString("path", "")
+	if path == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+	store, dbPath, err := openStoreForRepo(path)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	_ = dbPath
+
+	result, err := tools.ReindexRepo(path, store)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: reindex: %w", err)
+	}
 	return jsonResult(map[string]any{
-		"repo":            "",
-		"path":            req.GetString("path", ""),
-		"files_indexed":   0,
-		"symbols_indexed": 0,
-		"duration_ms":     0,
+		"repo":            result.Repo,
+		"path":            result.Path,
+		"files_indexed":   result.FilesIndexed,
+		"symbols_indexed": result.SymbolsIndexed,
+		"duration_ms":     result.DurationMs,
 	})
+}
+
+func openStoreForRepo(repoPath string) (*storage.Store, string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, "", fmt.Errorf("mcp: get home dir: %w", err)
+	}
+	atlasDir := filepath.Join(home, ".atlas")
+	if err := os.MkdirAll(atlasDir, 0o755); err != nil {
+		return nil, "", fmt.Errorf("mcp: create ~/.atlas: %w", err)
+	}
+	dbPath := filepath.Join(atlasDir, filepath.Base(repoPath)+".db")
+	store, err := storage.Open(dbPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("mcp: open store: %w", err)
+	}
+	return store, dbPath, nil
 }
 
 func handleSearch(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
