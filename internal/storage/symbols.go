@@ -115,6 +115,35 @@ func (s *Store) GetSymbolByName(name string) (*SymbolDetail, error) {
 	return detail, nil
 }
 
+// GetSymbolsByFileID returns all symbols belonging to a file.
+func (s *Store) GetSymbolsByFileID(fileID int64) ([]Symbol, error) {
+	var symbols []Symbol
+	err := sqlitex.Execute(s.conn,
+		`SELECT id, file_id, repo_id, name, kind, signature, doc, line_start, line_end
+		 FROM symbols WHERE file_id = :file_id ORDER BY line_start`,
+		&sqlitex.ExecOptions{
+			Named: map[string]any{":file_id": fileID},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				symbols = append(symbols, Symbol{
+					ID:        stmt.ColumnInt64(0),
+					FileID:    stmt.ColumnInt64(1),
+					RepoID:    stmt.ColumnInt64(2),
+					Name:      stmt.ColumnText(3),
+					Kind:      stmt.ColumnText(4),
+					Signature: stmt.ColumnText(5),
+					Doc:       stmt.ColumnText(6),
+					LineStart: stmt.ColumnInt64(7),
+					LineEnd:   stmt.ColumnInt64(8),
+				})
+				return nil
+			},
+		})
+	if err != nil {
+		return nil, fmt.Errorf("storage: get symbols for file %d: %w", fileID, err)
+	}
+	return symbols, nil
+}
+
 // Search runs a full-text search over symbols and returns ranked results.
 func (s *Store) Search(query string, limit int) ([]SearchResult, error) {
 	var results []SearchResult

@@ -37,6 +37,40 @@ func (s *Store) UpsertFile(file File) (int64, error) {
 	return s.conn.LastInsertRowID(), nil
 }
 
+// FileEntry pairs a file path with its repo metadata.
+type FileEntry struct {
+	FileID   int64
+	RepoID   int64
+	RepoName string
+	RepoPath string
+	FilePath string // relative to repo root
+}
+
+// ListAllFiles returns all files with their repo metadata.
+func (s *Store) ListAllFiles() ([]FileEntry, error) {
+	var files []FileEntry
+	err := sqlitex.Execute(s.conn,
+		`SELECT f.id, f.repo_id, r.name, r.path, f.path
+		 FROM files f JOIN repos r ON r.id = f.repo_id
+		 ORDER BY r.name, f.path`,
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				files = append(files, FileEntry{
+					FileID:   stmt.ColumnInt64(0),
+					RepoID:   stmt.ColumnInt64(1),
+					RepoName: stmt.ColumnText(2),
+					RepoPath: stmt.ColumnText(3),
+					FilePath: stmt.ColumnText(4),
+				})
+				return nil
+			},
+		})
+	if err != nil {
+		return nil, fmt.Errorf("storage: list all files: %w", err)
+	}
+	return files, nil
+}
+
 // GetFile returns a file by repo ID and path, or nil if not found.
 func (s *Store) GetFile(repoID int64, path string) (*File, error) {
 	var file *File
