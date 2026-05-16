@@ -1,5 +1,6 @@
 # Binaries
-atlas
+/atlas
+atlas.exe
 *.exe
 
 # Build output
