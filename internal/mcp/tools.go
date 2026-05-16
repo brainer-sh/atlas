@@ -118,13 +118,9 @@ func handleReindex(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallT
 }
 
 func openStoreForRepo(repoPath string) (*storage.Store, string, error) {
-	home, err := os.UserHomeDir()
+	atlasDir, err := atlasDataDir()
 	if err != nil {
-		return nil, "", fmt.Errorf("mcp: get home dir: %w", err)
-	}
-	atlasDir := filepath.Join(home, ".atlas")
-	if err := os.MkdirAll(atlasDir, 0o755); err != nil {
-		return nil, "", fmt.Errorf("mcp: create ~/.atlas: %w", err)
+		return nil, "", err
 	}
 	dbPath := filepath.Join(atlasDir, filepath.Base(repoPath)+".db")
 	store, err := storage.Open(dbPath)
@@ -159,7 +155,30 @@ func handleGetMap(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallTool
 }
 
 func handleListRepos(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	atlasDir, err := atlasDataDir()
+	if err != nil {
+		return nil, err
+	}
+	repos, err := tools.ListRepos(atlasDir)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: list_repos: %w", err)
+	}
+	if repos == nil {
+		repos = []tools.RepoEntry{}
+	}
 	return jsonResult(map[string]any{
-		"repos": []any{},
+		"repos": repos,
 	})
+}
+
+func atlasDataDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("mcp: get home dir: %w", err)
+	}
+	dir := filepath.Join(home, ".atlas")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("mcp: create ~/.atlas: %w", err)
+	}
+	return dir, nil
 }
