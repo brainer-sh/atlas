@@ -172,11 +172,17 @@ func handleExplore(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallT
 	return jsonResult(result)
 }
 
-func handleGetMap(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	return jsonResult(map[string]any{
-		"focus":   nil,
-		"diagram": "",
-	})
+func handleGetMap(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	focus := req.GetString("focus", "")
+	atlasDir, err := atlasDataDir()
+	if err != nil {
+		return nil, err
+	}
+	result, err := tools.GetMap(atlasDir, focus)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: get_map: %w", err)
+	}
+	return jsonResult(result)
 }
 
 func handleListRepos(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
