@@ -1,0 +1,28 @@
+# Binaries
+atlas
+*.exe
+
+# Build output
+dist/
+
+# Go
+*.test
+*.out
+vendor/
+
+# Embedded model and native libs (downloaded at build time)
+internal/embeddings/model/
+internal/embeddings/lib/
+
+# Atlas runtime data
+~/.atlas/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
