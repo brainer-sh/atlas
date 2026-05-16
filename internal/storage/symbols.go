@@ -70,6 +70,51 @@ func (s *Store) DeleteSymbolsForFile(fileID int64) error {
 	return nil
 }
 
+// SymbolDetail extends Symbol with its file path and repo path.
+type SymbolDetail struct {
+	Symbol
+	FilePath string
+	RepoPath string
+}
+
+// GetSymbolByName returns the first symbol with an exact name match, or nil if not found.
+func (s *Store) GetSymbolByName(name string) (*SymbolDetail, error) {
+	var detail *SymbolDetail
+	err := sqlitex.Execute(s.conn,
+		`SELECT s.id, s.file_id, s.repo_id, s.name, s.kind, s.signature, s.doc,
+		        s.line_start, s.line_end, f.path, r.path
+		 FROM symbols s
+		 JOIN files f ON f.id = s.file_id
+		 JOIN repos r ON r.id = s.repo_id
+		 WHERE s.name = :name
+		 LIMIT 1`,
+		&sqlitex.ExecOptions{
+			Named: map[string]any{":name": name},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				detail = &SymbolDetail{
+					Symbol: Symbol{
+						ID:        stmt.ColumnInt64(0),
+						FileID:    stmt.ColumnInt64(1),
+						RepoID:    stmt.ColumnInt64(2),
+						Name:      stmt.ColumnText(3),
+						Kind:      stmt.ColumnText(4),
+						Signature: stmt.ColumnText(5),
+						Doc:       stmt.ColumnText(6),
+						LineStart: stmt.ColumnInt64(7),
+						LineEnd:   stmt.ColumnInt64(8),
+					},
+					FilePath: stmt.ColumnText(9),
+					RepoPath: stmt.ColumnText(10),
+				}
+				return nil
+			},
+		})
+	if err != nil {
+		return nil, fmt.Errorf("storage: get symbol %s: %w", name, err)
+	}
+	return detail, nil
+}
+
 // Search runs a full-text search over symbols and returns ranked results.
 func (s *Store) Search(query string, limit int) ([]SearchResult, error) {
 	var results []SearchResult
