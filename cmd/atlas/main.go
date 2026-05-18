@@ -12,6 +12,8 @@ import (
 	"github.com/brainer.sh/atlas/internal/tools"
 )
 
+const version = "0.1.0"
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -40,6 +42,8 @@ func main() {
 		cmdSearch(os.Args[2])
 	case "--help", "-h", "help":
 		usage()
+	case "--version", "-v", "version":
+		fmt.Println("atlas", version)
 	default:
 		fmt.Fprintf(os.Stderr, "atlas: unknown command %q\n\n", os.Args[1])
 		usage()
