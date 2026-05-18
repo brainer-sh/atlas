@@ -23,6 +23,16 @@ func fixtureDir() string {
 	return filepath.Join(filepath.Dir(file), "..", "..", "testdata", "go", "simple")
 }
 
+func fixtureDirC() string {
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(file), "..", "..", "testdata", "c", "simple")
+}
+
+func fixtureDirCpp() string {
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(file), "..", "..", "testdata", "cpp", "simple")
+}
+
 func TestIndexRepo(t *testing.T) {
 	store := openTestStore(t)
 	dir := fixtureDir()
@@ -91,6 +101,70 @@ func TestReindexRepo_NoChanges(t *testing.T) {
 		t.Errorf("ReindexRepo with no changes: FilesIndexed = %d, want 0", second.FilesIndexed)
 	}
 	_ = first
+}
+
+func TestDetectLang(t *testing.T) {
+	tests := []struct {
+		name string
+		dir  string
+		want string
+	}{
+		{name: "go", dir: fixtureDir(), want: "go"},
+		{name: "c", dir: fixtureDirC(), want: "c"},
+		{name: "cpp", dir: fixtureDirCpp(), want: "cpp"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := detectLang(tt.dir)
+			if got != tt.want {
+				t.Errorf("detectLang = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIndexRepo_C(t *testing.T) {
+	store := openTestStore(t)
+	result, err := IndexRepo(fixtureDirC(), store)
+	if err != nil {
+		t.Fatalf("IndexRepo(C) error: %v", err)
+	}
+	if result.FilesIndexed == 0 {
+		t.Error("FilesIndexed = 0")
+	}
+	if result.SymbolsIndexed == 0 {
+		t.Error("SymbolsIndexed = 0")
+	}
+
+	results, err := store.Search("add", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected symbol 'add' in search results")
+	}
+}
+
+func TestIndexRepo_Cpp(t *testing.T) {
+	store := openTestStore(t)
+	result, err := IndexRepo(fixtureDirCpp(), store)
+	if err != nil {
+		t.Fatalf("IndexRepo(C++) error: %v", err)
+	}
+	if result.FilesIndexed == 0 {
+		t.Error("FilesIndexed = 0")
+	}
+	if result.SymbolsIndexed == 0 {
+		t.Error("SymbolsIndexed = 0")
+	}
+
+	results, err := store.Search("Shape", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected symbol 'Shape' in search results")
+	}
 }
 
 func TestReindexRepo_NeverIndexed(t *testing.T) {
