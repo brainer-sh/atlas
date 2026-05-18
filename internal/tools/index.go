@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	cindexer "github.com/brainer.sh/atlas/internal/indexer/c"
+	cppindexer "github.com/brainer.sh/atlas/internal/indexer/cpp"
 	goindexer "github.com/brainer.sh/atlas/internal/indexer/go"
 	"github.com/brainer.sh/atlas/internal/storage"
 )
@@ -24,30 +26,35 @@ type IndexResult struct {
 	DurationMs     int64
 }
 
-// IndexRepo fully indexes all Go files in repoPath and stores results in store.
+// parseFunc converts a file path + source bytes to storage symbols.
+type parseFunc func(path string, src []byte) ([]storage.Symbol, error)
+
+// IndexRepo fully indexes a repository and stores results in store.
+// The language is auto-detected from the file extensions present.
 func IndexRepo(repoPath string, store *storage.Store) (*IndexResult, error) {
 	start := time.Now()
 	name := filepath.Base(repoPath)
+	lang := detectLang(repoPath)
 
 	repoID, err := store.UpsertRepo(storage.Repo{
 		Path:      repoPath,
 		Name:      name,
-		Lang:      "go",
+		Lang:      lang,
 		IndexedAt: start.Unix(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tools/index: upsert repo: %w", err)
 	}
 
-	idx, err := goindexer.New()
+	parse, walk, cleanup, err := langPipeline(lang)
 	if err != nil {
-		return nil, fmt.Errorf("tools/index: create indexer: %w", err)
+		return nil, fmt.Errorf("tools/index: init %s pipeline: %w", lang, err)
 	}
-	defer idx.Close()
+	defer cleanup()
 
 	var filesIndexed, symbolsIndexed int
-	err = walkGoFiles(repoPath, func(filePath string, content []byte, mtime int64) error {
-		n, err := indexFile(store, idx, repoID, repoPath, filePath, content, mtime)
+	err = walk(repoPath, func(filePath string, content []byte, mtime int64) error {
+		n, err := indexFile(store, parse, repoID, repoPath, filePath, content, mtime)
 		if err != nil {
 			return err
 		}
@@ -68,7 +75,7 @@ func IndexRepo(repoPath string, store *storage.Store) (*IndexResult, error) {
 	}, nil
 }
 
-// ReindexRepo re-indexes only Go files that changed since the last run.
+// ReindexRepo re-indexes only files that changed since the last run.
 // Falls back to a full index if the repo has never been indexed.
 func ReindexRepo(repoPath string, store *storage.Store) (*IndexResult, error) {
 	start := time.Now()
@@ -82,25 +89,25 @@ func ReindexRepo(repoPath string, store *storage.Store) (*IndexResult, error) {
 		return IndexRepo(repoPath, store)
 	}
 
-	// Update indexed_at but keep the existing ID.
 	repoID := repo.ID
+	lang := repo.Lang
 	if _, err := store.UpsertRepo(storage.Repo{
 		Path:      repoPath,
 		Name:      name,
-		Lang:      repo.Lang,
+		Lang:      lang,
 		IndexedAt: start.Unix(),
 	}); err != nil {
 		return nil, fmt.Errorf("tools/reindex: upsert repo: %w", err)
 	}
 
-	idx, err := goindexer.New()
+	parse, walk, cleanup, err := langPipeline(lang)
 	if err != nil {
-		return nil, fmt.Errorf("tools/reindex: create indexer: %w", err)
+		return nil, fmt.Errorf("tools/reindex: init %s pipeline: %w", lang, err)
 	}
-	defer idx.Close()
+	defer cleanup()
 
 	var filesIndexed, symbolsIndexed int
-	err = walkGoFiles(repoPath, func(filePath string, content []byte, mtime int64) error {
+	err = walk(repoPath, func(filePath string, content []byte, mtime int64) error {
 		relPath, _ := filepath.Rel(repoPath, filePath)
 		hash := hashBytes(content)
 
@@ -112,7 +119,7 @@ func ReindexRepo(repoPath string, store *storage.Store) (*IndexResult, error) {
 			return nil // unchanged
 		}
 
-		n, err := indexFile(store, idx, repoID, repoPath, filePath, content, mtime)
+		n, err := indexFile(store, parse, repoID, repoPath, filePath, content, mtime)
 		if err != nil {
 			return err
 		}
@@ -133,8 +140,55 @@ func ReindexRepo(repoPath string, store *storage.Store) (*IndexResult, error) {
 	}, nil
 }
 
+// langPipeline returns the parse function, walker, and cleanup for a language.
+func langPipeline(lang string) (parseFunc, walkFunc, func(), error) {
+	switch lang {
+	case "c":
+		idx, err := cindexer.New()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		parse := func(_ string, src []byte) ([]storage.Symbol, error) {
+			fi, err := idx.IndexSource(src)
+			if err != nil {
+				return nil, err
+			}
+			return cSymbols(fi.Symbols), nil
+		}
+		return parse, walkCFiles, idx.Close, nil
+
+	case "cpp":
+		idx, err := cppindexer.New()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		parse := func(_ string, src []byte) ([]storage.Symbol, error) {
+			fi, err := idx.IndexSource(src)
+			if err != nil {
+				return nil, err
+			}
+			return cppSymbols(fi.Symbols), nil
+		}
+		return parse, walkCppFiles, idx.Close, nil
+
+	default: // "go"
+		idx, err := goindexer.New()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		parse := func(_ string, src []byte) ([]storage.Symbol, error) {
+			fi, err := idx.IndexSource(src)
+			if err != nil {
+				return nil, err
+			}
+			return goSymbols(fi.Symbols), nil
+		}
+		return parse, walkGoFiles, idx.Close, nil
+	}
+}
+
 // indexFile parses a single file and stores its symbols. Returns symbol count.
-func indexFile(store *storage.Store, idx *goindexer.Indexer, repoID int64, repoPath, filePath string, content []byte, mtime int64) (int, error) {
+func indexFile(store *storage.Store, parse parseFunc, repoID int64, repoPath, filePath string, content []byte, mtime int64) (int, error) {
 	relPath, _ := filepath.Rel(repoPath, filePath)
 
 	fileID, err := store.UpsertFile(storage.File{
@@ -151,23 +205,13 @@ func indexFile(store *storage.Store, idx *goindexer.Indexer, repoID int64, repoP
 		return 0, fmt.Errorf("delete symbols for %s: %w", relPath, err)
 	}
 
-	fi, err := idx.IndexSource(content)
+	syms, err := parse(filePath, content)
 	if err != nil {
 		return 0, fmt.Errorf("parse %s: %w", relPath, err)
 	}
-
-	syms := make([]storage.Symbol, len(fi.Symbols))
-	for i, s := range fi.Symbols {
-		syms[i] = storage.Symbol{
-			FileID:    fileID,
-			RepoID:    repoID,
-			Name:      s.Name,
-			Kind:      s.Kind,
-			Signature: s.Signature,
-			Doc:       s.Doc,
-			LineStart: int64(s.LineStart),
-			LineEnd:   int64(s.LineEnd),
-		}
+	for i := range syms {
+		syms[i].FileID = fileID
+		syms[i].RepoID = repoID
 	}
 
 	if err := store.InsertSymbols(syms); err != nil {
@@ -176,19 +220,43 @@ func indexFile(store *storage.Store, idx *goindexer.Indexer, repoID int64, repoP
 	return len(syms), nil
 }
 
+// walkFunc walks a repo and calls fn for each source file.
+type walkFunc func(root string, fn func(path string, content []byte, mtime int64) error) error
+
 func walkGoFiles(root string, fn func(path string, content []byte, mtime int64) error) error {
+	return walkFiles(root, []string{".go"}, func(name string) bool {
+		return strings.HasSuffix(name, "_test.go")
+	}, fn)
+}
+
+func walkCFiles(root string, fn func(path string, content []byte, mtime int64) error) error {
+	return walkFiles(root, []string{".c", ".h"}, nil, fn)
+}
+
+func walkCppFiles(root string, fn func(path string, content []byte, mtime int64) error) error {
+	return walkFiles(root, []string{".cpp", ".cxx", ".cc", ".hpp", ".hxx", ".hh", ".h", ".c"}, nil, fn)
+}
+
+func walkFiles(root string, exts []string, skip func(name string) bool, fn func(string, []byte, int64) error) error {
+	extSet := make(map[string]bool, len(exts))
+	for _, e := range exts {
+		extSet[e] = true
+	}
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata" {
+			if strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata" || name == "build" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if !extSet[filepath.Ext(path)] {
+			return nil
+		}
+		if skip != nil && skip(d.Name()) {
 			return nil
 		}
 		info, err := d.Info()
@@ -201,6 +269,80 @@ func walkGoFiles(root string, fn func(path string, content []byte, mtime int64) 
 		}
 		return fn(path, content, info.ModTime().Unix())
 	})
+}
+
+// detectLang returns the dominant language of a repo by counting source files.
+func detectLang(repoPath string) string {
+	counts := map[string]int{}
+	_ = filepath.WalkDir(repoPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		switch filepath.Ext(path) {
+		case ".go":
+			counts["go"]++
+		case ".cpp", ".cxx", ".cc", ".hpp", ".hxx", ".hh":
+			counts["cpp"]++
+		case ".c", ".h":
+			counts["c"]++
+		}
+		return nil
+	})
+	best := "go"
+	bestN := 0
+	for lang, n := range counts {
+		if n > bestN {
+			best, bestN = lang, n
+		}
+	}
+	return best
+}
+
+// Symbol converters.
+
+func goSymbols(in []goindexer.Symbol) []storage.Symbol {
+	out := make([]storage.Symbol, len(in))
+	for i, s := range in {
+		out[i] = storage.Symbol{
+			Name:      s.Name,
+			Kind:      s.Kind,
+			Signature: s.Signature,
+			Doc:       s.Doc,
+			LineStart: int64(s.LineStart),
+			LineEnd:   int64(s.LineEnd),
+		}
+	}
+	return out
+}
+
+func cSymbols(in []cindexer.Symbol) []storage.Symbol {
+	out := make([]storage.Symbol, len(in))
+	for i, s := range in {
+		out[i] = storage.Symbol{
+			Name:      s.Name,
+			Kind:      s.Kind,
+			Signature: s.Signature,
+			Doc:       s.Doc,
+			LineStart: int64(s.LineStart),
+			LineEnd:   int64(s.LineEnd),
+		}
+	}
+	return out
+}
+
+func cppSymbols(in []cppindexer.Symbol) []storage.Symbol {
+	out := make([]storage.Symbol, len(in))
+	for i, s := range in {
+		out[i] = storage.Symbol{
+			Name:      s.Name,
+			Kind:      s.Kind,
+			Signature: s.Signature,
+			Doc:       s.Doc,
+			LineStart: int64(s.LineStart),
+			LineEnd:   int64(s.LineEnd),
+		}
+	}
+	return out
 }
 
 func hashBytes(b []byte) string {
