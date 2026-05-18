@@ -60,6 +60,11 @@ CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols BEGIN
     INSERT INTO symbols_fts(rowid, name, signature, doc)
     VALUES (new.id, new.name, new.signature, new.doc);
 END;
+
+CREATE TABLE IF NOT EXISTS symbols_embeddings (
+    symbol_id INTEGER PRIMARY KEY REFERENCES symbols(id),
+    embedding BLOB NOT NULL
+);
 `
 
 // Store handles all database operations for Atlas.
