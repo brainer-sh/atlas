@@ -36,11 +36,17 @@ func ExploreSymbol(atlasDir, symbolName string) (*ExploreResult, error) {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".db" {
 			continue
 		}
-		detail, err := symbolFromDB(filepath.Join(atlasDir, e.Name()), symbolName)
+		detail, callers, callees, err := symbolFromDB(filepath.Join(atlasDir, e.Name()), symbolName)
 		if err != nil {
 			return nil, err
 		}
 		if detail != nil {
+			if callers == nil {
+				callers = []string{}
+			}
+			if callees == nil {
+				callees = []string{}
+			}
 			return &ExploreResult{
 				Symbol:    detail.Name,
 				Kind:      detail.Kind,
@@ -49,23 +55,38 @@ func ExploreSymbol(atlasDir, symbolName string) (*ExploreResult, error) {
 				LineEnd:   detail.LineEnd,
 				Signature: detail.Signature,
 				Doc:       detail.Doc,
-				Callers:   []string{},
-				Callees:   []string{},
+				Callers:   callers,
+				Callees:   callees,
 			}, nil
 		}
 	}
 	return nil, nil
 }
 
-func symbolFromDB(dbPath, symbolName string) (*storage.SymbolDetail, error) {
+func symbolFromDB(dbPath, symbolName string) (*storage.SymbolDetail, []string, []string, error) {
 	store, err := storage.Open(dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("tools/explore: open %s: %w", dbPath, err)
+		return nil, nil, nil, fmt.Errorf("tools/explore: open %s: %w", dbPath, err)
 	}
 	defer store.Close()
+
 	detail, err := store.GetSymbolByName(symbolName)
 	if err != nil {
-		return nil, fmt.Errorf("tools/explore: query %s: %w", dbPath, err)
+		return nil, nil, nil, fmt.Errorf("tools/explore: query %s: %w", dbPath, err)
 	}
-	return detail, nil
+	if detail == nil {
+		return nil, nil, nil, nil
+	}
+
+	callers, err := store.GetCallers(symbolName)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("tools/explore: get callers %s: %w", dbPath, err)
+	}
+
+	callees, err := store.GetCallees(detail.ID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("tools/explore: get callees %s: %w", dbPath, err)
+	}
+
+	return detail, callers, callees, nil
 }

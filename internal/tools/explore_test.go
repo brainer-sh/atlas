@@ -85,6 +85,53 @@ func TestExploreSymbol_function(t *testing.T) {
 	}
 }
 
+func TestExploreSymbol_callersCallees(t *testing.T) {
+	atlasDir := t.TempDir()
+	seedExploreDB(t, atlasDir)
+
+	// Run() calls Add(), so Add should have Run as a caller.
+	add, err := ExploreSymbol(atlasDir, "Add")
+	if err != nil {
+		t.Fatalf("ExploreSymbol(Add): %v", err)
+	}
+	if add == nil {
+		t.Fatal("ExploreSymbol(Add) = nil")
+	}
+	if len(add.Callers) == 0 {
+		t.Error("Add.Callers is empty, want at least [Run]")
+	}
+	found := false
+	for _, c := range add.Callers {
+		if c == "Run" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Add.Callers = %v, want to contain Run", add.Callers)
+	}
+
+	// Run() calls Add(), so Run should have Add as a callee.
+	run, err := ExploreSymbol(atlasDir, "Run")
+	if err != nil {
+		t.Fatalf("ExploreSymbol(Run): %v", err)
+	}
+	if run == nil {
+		t.Fatal("ExploreSymbol(Run) = nil")
+	}
+	if len(run.Callees) == 0 {
+		t.Error("Run.Callees is empty, want at least [Add]")
+	}
+	foundCallee := false
+	for _, c := range run.Callees {
+		if c == "Add" {
+			foundCallee = true
+		}
+	}
+	if !foundCallee {
+		t.Errorf("Run.Callees = %v, want to contain Add", run.Callees)
+	}
+}
+
 func TestExploreSymbol_struct(t *testing.T) {
 	atlasDir := t.TempDir()
 	seedExploreDB(t, atlasDir)
