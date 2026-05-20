@@ -4,12 +4,15 @@ import (
 	"log/slog"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
+
+	"github.com/brainer.sh/atlas/internal/embeddings"
 )
 
-// New creates and configures the Atlas MCP server with all tool stubs registered.
-func New() *mcpserver.MCPServer {
+// New creates and configures the Atlas MCP server.
+// e may be nil; in that case search falls back to FTS-only.
+func New(e embeddings.Embedder) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer("atlas", "0.1.0")
-	registerTools(s)
+	registerTools(s, e)
 	slog.Info("mcp server initialized")
 	return s
 }

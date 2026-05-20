@@ -43,17 +43,20 @@ type OnnxEmbedder struct {
 }
 
 // NewOnnxEmbedder loads the ONNX model and prepares the inference session.
-// Requires scripts/download-deps.sh to have been run first.
+// The native ORT library and tokenizer are embedded in the binary.
+// Only the model file must be present at ~/.atlas/models/ (run scripts/download-deps.sh).
 func NewOnnxEmbedder() (Embedder, error) {
-	libPath := atlasLibPath()
-	modelPath := atlasModelPath()
-	tokPath := atlasTokPath()
-
-	for _, p := range []string{libPath, modelPath, tokPath} {
-		if _, err := os.Stat(p); err != nil {
-			return nil, fmt.Errorf("embeddings: %s missing - run scripts/download-deps.sh: %w", p, err)
-		}
+	libPath, err := extractNativeLib()
+	if err != nil {
+		return nil, err
 	}
+
+	modelPath := atlasModelPath()
+	if _, err := os.Stat(modelPath); err != nil {
+		return nil, fmt.Errorf("embeddings: model missing at %s - run scripts/download-deps.sh: %w", modelPath, err)
+	}
+
+	preloadLibstdcxx()
 
 	if err := initORT(libPath); err != nil {
 		return nil, fmt.Errorf("embeddings: init onnxruntime: %w", err)
@@ -69,13 +72,31 @@ func NewOnnxEmbedder() (Embedder, error) {
 		return nil, fmt.Errorf("embeddings: create session: %w", err)
 	}
 
-	tok, err := loadTokenizer(tokPath)
+	tok, err := loadTokenizerBytes(tokenizerData)
 	if err != nil {
 		session.Destroy()
 		return nil, fmt.Errorf("embeddings: load tokenizer: %w", err)
 	}
 
 	return &OnnxEmbedder{session: session, tok: tok}, nil
+}
+
+// extractNativeLib writes the embedded ORT library to ~/.atlas/lib/ if not already present.
+func extractNativeLib() (string, error) {
+	dst := atlasLibPath()
+	if _, err := os.Stat(dst); err == nil {
+		return dst, nil
+	}
+	if len(nativeLib) == 0 {
+		return "", fmt.Errorf("embeddings: no native ORT library embedded for this platform")
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return "", fmt.Errorf("embeddings: create lib dir: %w", err)
+	}
+	if err := os.WriteFile(dst, nativeLib, 0o755); err != nil {
+		return "", fmt.Errorf("embeddings: write native lib: %w", err)
+	}
+	return dst, nil
 }
 
 // Dim returns the embedding dimension.
@@ -194,10 +215,6 @@ func atlasModelPath() string {
 	return filepath.Join(home, ".atlas", "models", "all-MiniLM-L6-v2.onnx")
 }
 
-func atlasTokPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".atlas", "models", "tokenizer.json")
-}
 
 // --- WordPiece tokenizer ---
 
@@ -220,11 +237,7 @@ type tokenizerJSON struct {
 	} `json:"normalizer"`
 }
 
-func loadTokenizer(path string) (*wordpieceTokenizer, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read: %w", err)
-	}
+func loadTokenizerBytes(data []byte) (*wordpieceTokenizer, error) {
 	var tj tokenizerJSON
 	if err := json.Unmarshal(data, &tj); err != nil {
 		return nil, fmt.Errorf("parse: %w", err)

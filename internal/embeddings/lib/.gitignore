@@ -1,0 +1,5 @@
+# Ignore native binaries (downloaded by scripts/download-deps.sh before build)
+*.so
+*.dylib
+*.dll
+!.gitkeep
