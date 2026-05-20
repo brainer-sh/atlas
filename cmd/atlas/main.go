@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -62,6 +63,9 @@ func cmdIndex(repoPath string) {
 	if err != nil {
 		fatalf("index: %v", err)
 	}
+
+	embedSymbols(store)
+
 	printJSON(map[string]any{
 		"repo":            result.Repo,
 		"path":            result.Path,
@@ -82,6 +86,9 @@ func cmdReindex(repoPath string) {
 	if err != nil {
 		fatalf("reindex: %v", err)
 	}
+
+	embedSymbols(store)
+
 	printJSON(map[string]any{
 		"repo":            result.Repo,
 		"path":            result.Path,
@@ -107,7 +114,11 @@ func cmdList() {
 }
 
 func cmdServe() {
-	s := mcp.New()
+	e := newEmbedder()
+	if e != nil {
+		defer e.Close()
+	}
+	s := mcp.New(e)
 	if err := mcp.Serve(s); err != nil {
 		fatalf("serve: %v", err)
 	}
@@ -118,11 +129,28 @@ func cmdSearch(query string) {
 	if err != nil {
 		fatalf("search: %v", err)
 	}
-	result, err := search.Search(dir, query)
+	e := newEmbedder()
+	if e != nil {
+		defer e.Close()
+	}
+	result, err := search.HybridSearch(context.Background(), dir, query, e, 20)
 	if err != nil {
 		fatalf("search: %v", err)
 	}
 	printJSON(result)
+}
+
+// embedSymbols embeds all symbols in store using the configured embedder.
+// No-op if no embedder is available.
+func embedSymbols(store *storage.Store) {
+	e := newEmbedder()
+	if e == nil {
+		return
+	}
+	defer e.Close()
+	if err := tools.EmbedAll(context.Background(), store, e); err != nil {
+		fatalf("embed: %v", err)
+	}
 }
 
 func openStoreForRepo(repoPath string) (*storage.Store, error) {

@@ -11,9 +11,11 @@ dist/
 *.out
 vendor/
 
-# Embedded model and native libs (downloaded at build time)
-internal/embeddings/model/
-internal/embeddings/lib/
+# Embedded native libs and tokenizer (downloaded by scripts/download-deps.sh before build)
+internal/embeddings/lib/**/*.so
+internal/embeddings/lib/**/*.dylib
+internal/embeddings/lib/**/*.dll
+internal/embeddings/tokenizer.json
 
 # Atlas runtime data
 ~/.atlas/

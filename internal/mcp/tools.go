@@ -10,19 +10,26 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/brainer.sh/atlas/internal/embeddings"
 	"github.com/brainer.sh/atlas/internal/search"
 	"github.com/brainer.sh/atlas/internal/storage"
 	"github.com/brainer.sh/atlas/internal/tools"
 )
 
-func registerTools(s *mcpserver.MCPServer) {
+// handlers holds server-level dependencies shared across MCP tool calls.
+type handlers struct {
+	embedder embeddings.Embedder
+}
+
+func registerTools(s *mcpserver.MCPServer, e embeddings.Embedder) {
+	h := &handlers{embedder: e}
 	s.AddTool(mcplib.NewTool("index_repo",
 		mcplib.WithDescription("Index a repository for the first time."),
 		mcplib.WithString("path",
 			mcplib.Required(),
 			mcplib.Description("Absolute path to the repository root."),
 		),
-	), handleIndexRepo)
+	), h.handleIndexRepo)
 
 	s.AddTool(mcplib.NewTool("reindex",
 		mcplib.WithDescription("Re-index only files that changed since the last run."),
@@ -30,7 +37,7 @@ func registerTools(s *mcpserver.MCPServer) {
 			mcplib.Required(),
 			mcplib.Description("Absolute path to the repository root."),
 		),
-	), handleReindex)
+	), h.handleReindex)
 
 	s.AddTool(mcplib.NewTool("search",
 		mcplib.WithDescription("Search for symbols by name, signature, or doc comment."),
@@ -38,7 +45,7 @@ func registerTools(s *mcpserver.MCPServer) {
 			mcplib.Required(),
 			mcplib.Description("Search query."),
 		),
-	), handleSearch)
+	), h.handleSearch)
 
 	s.AddTool(mcplib.NewTool("explore",
 		mcplib.WithDescription("Get details about a symbol including its callers and callees."),
@@ -46,18 +53,18 @@ func registerTools(s *mcpserver.MCPServer) {
 			mcplib.Required(),
 			mcplib.Description("Symbol name to explore."),
 		),
-	), handleExplore)
+	), h.handleExplore)
 
 	s.AddTool(mcplib.NewTool("get_map",
 		mcplib.WithDescription("Get a Mermaid diagram of the repo architecture."),
 		mcplib.WithString("focus",
 			mcplib.Description("Optional symbol name to focus the call graph."),
 		),
-	), handleGetMap)
+	), h.handleGetMap)
 
 	s.AddTool(mcplib.NewTool("list_repos",
 		mcplib.WithDescription("List all indexed repositories."),
-	), handleListRepos)
+	), h.handleListRepos)
 }
 
 func jsonResult(v any) (*mcplib.CallToolResult, error) {
@@ -68,7 +75,7 @@ func jsonResult(v any) (*mcplib.CallToolResult, error) {
 	return mcplib.NewToolResultText(string(b)), nil
 }
 
-func handleIndexRepo(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *handlers) handleIndexRepo(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	path := req.GetString("path", "")
 	if path == "" {
 		return nil, fmt.Errorf("path is required")
@@ -93,7 +100,7 @@ func handleIndexRepo(_ context.Context, req mcplib.CallToolRequest) (*mcplib.Cal
 	})
 }
 
-func handleReindex(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *handlers) handleReindex(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	path := req.GetString("path", "")
 	if path == "" {
 		return nil, fmt.Errorf("path is required")
@@ -131,7 +138,7 @@ func openStoreForRepo(repoPath string) (*storage.Store, string, error) {
 	return store, dbPath, nil
 }
 
-func handleSearch(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *handlers) handleSearch(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	query := req.GetString("query", "")
 	if query == "" {
 		return nil, fmt.Errorf("query is required")
@@ -140,14 +147,14 @@ func handleSearch(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallTo
 	if err != nil {
 		return nil, err
 	}
-	result, err := search.Search(atlasDir, query)
+	result, err := search.HybridSearch(ctx, atlasDir, query, h.embedder, 20)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: search: %w", err)
 	}
 	return jsonResult(result)
 }
 
-func handleExplore(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *handlers) handleExplore(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	symbol := req.GetString("symbol", "")
 	if symbol == "" {
 		return nil, fmt.Errorf("symbol is required")
@@ -172,7 +179,7 @@ func handleExplore(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallT
 	return jsonResult(result)
 }
 
-func handleGetMap(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *handlers) handleGetMap(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	focus := req.GetString("focus", "")
 	atlasDir, err := atlasDataDir()
 	if err != nil {
@@ -185,7 +192,7 @@ func handleGetMap(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallTo
 	return jsonResult(result)
 }
 
-func handleListRepos(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *handlers) handleListRepos(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	atlasDir, err := atlasDataDir()
 	if err != nil {
 		return nil, err

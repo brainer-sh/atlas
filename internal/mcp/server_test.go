@@ -16,7 +16,7 @@ func fixtureDir() string {
 }
 
 func TestNew(t *testing.T) {
-	s := New()
+	s := New(nil)
 	if s == nil {
 		t.Fatal("New() returned nil")
 	}
@@ -24,6 +24,7 @@ func TestNew(t *testing.T) {
 
 func TestHandlers(t *testing.T) {
 	ctx := context.Background()
+	h := &handlers{embedder: nil}
 
 	tests := []struct {
 		name    string
@@ -33,37 +34,37 @@ func TestHandlers(t *testing.T) {
 	}{
 		{
 			name:    "index_repo",
-			handler: handleIndexRepo,
+			handler: h.handleIndexRepo,
 			args:    map[string]any{"path": fixtureDir()},
 			wantKey: "files_indexed",
 		},
 		{
 			name:    "reindex",
-			handler: handleReindex,
+			handler: h.handleReindex,
 			args:    map[string]any{"path": fixtureDir()},
 			wantKey: "files_indexed",
 		},
 		{
 			name:    "search",
-			handler: handleSearch,
+			handler: h.handleSearch,
 			args:    map[string]any{"query": "foo"},
 			wantKey: "results",
 		},
 		{
 			name:    "explore",
-			handler: handleExplore,
+			handler: h.handleExplore,
 			args:    map[string]any{"symbol": "Foo"},
 			wantKey: "callers",
 		},
 		{
 			name:    "get_map",
-			handler: handleGetMap,
+			handler: h.handleGetMap,
 			args:    map[string]any{},
 			wantKey: "diagram",
 		},
 		{
 			name:    "list_repos",
-			handler: handleListRepos,
+			handler: h.handleListRepos,
 			args:    map[string]any{},
 			wantKey: "repos",
 		},
