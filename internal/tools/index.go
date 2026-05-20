@@ -26,8 +26,14 @@ type IndexResult struct {
 	DurationMs     int64
 }
 
-// parseFunc converts a file path + source bytes to storage symbols.
-type parseFunc func(path string, src []byte) ([]storage.Symbol, error)
+// rawCallSite is a call site as extracted by the indexer, before symbol ID resolution.
+type rawCallSite struct {
+	calleeName string
+	line       int64
+}
+
+// parseFunc converts a file path + source bytes to storage symbols and raw call sites.
+type parseFunc func(path string, src []byte) ([]storage.Symbol, []rawCallSite, error)
 
 // IndexRepo fully indexes a repository and stores results in store.
 // The language is auto-detected from the file extensions present.
@@ -148,12 +154,12 @@ func langPipeline(lang string) (parseFunc, walkFunc, func(), error) {
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		parse := func(_ string, src []byte) ([]storage.Symbol, error) {
+		parse := func(_ string, src []byte) ([]storage.Symbol, []rawCallSite, error) {
 			fi, err := idx.IndexSource(src)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			return cSymbols(fi.Symbols), nil
+			return cSymbols(fi.Symbols), cRawSites(fi.CallSites), nil
 		}
 		return parse, walkCFiles, idx.Close, nil
 
@@ -162,12 +168,12 @@ func langPipeline(lang string) (parseFunc, walkFunc, func(), error) {
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		parse := func(_ string, src []byte) ([]storage.Symbol, error) {
+		parse := func(_ string, src []byte) ([]storage.Symbol, []rawCallSite, error) {
 			fi, err := idx.IndexSource(src)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			return cppSymbols(fi.Symbols), nil
+			return cppSymbols(fi.Symbols), cppRawSites(fi.CallSites), nil
 		}
 		return parse, walkCppFiles, idx.Close, nil
 
@@ -176,18 +182,18 @@ func langPipeline(lang string) (parseFunc, walkFunc, func(), error) {
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		parse := func(_ string, src []byte) ([]storage.Symbol, error) {
+		parse := func(_ string, src []byte) ([]storage.Symbol, []rawCallSite, error) {
 			fi, err := idx.IndexSource(src)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			return goSymbols(fi.Symbols), nil
+			return goSymbols(fi.Symbols), goRawSites(fi.CallSites), nil
 		}
 		return parse, walkGoFiles, idx.Close, nil
 	}
 }
 
-// indexFile parses a single file and stores its symbols. Returns symbol count.
+// indexFile parses a single file and stores its symbols and call sites. Returns symbol count.
 func indexFile(store *storage.Store, parse parseFunc, repoID int64, repoPath, filePath string, content []byte, mtime int64) (int, error) {
 	relPath, _ := filepath.Rel(repoPath, filePath)
 
@@ -201,11 +207,15 @@ func indexFile(store *storage.Store, parse parseFunc, repoID int64, repoPath, fi
 		return 0, fmt.Errorf("upsert file %s: %w", relPath, err)
 	}
 
+	// Delete call sites before symbols (call_sites.caller_symbol_id references symbols).
+	if err := store.DeleteCallSitesForFile(fileID); err != nil {
+		return 0, fmt.Errorf("delete call sites for %s: %w", relPath, err)
+	}
 	if err := store.DeleteSymbolsForFile(fileID); err != nil {
 		return 0, fmt.Errorf("delete symbols for %s: %w", relPath, err)
 	}
 
-	syms, err := parse(filePath, content)
+	syms, rawSites, err := parse(filePath, content)
 	if err != nil {
 		return 0, fmt.Errorf("parse %s: %w", relPath, err)
 	}
@@ -217,7 +227,38 @@ func indexFile(store *storage.Store, parse parseFunc, repoID int64, repoPath, fi
 	if err := store.InsertSymbols(syms); err != nil {
 		return 0, fmt.Errorf("insert symbols for %s: %w", relPath, err)
 	}
+
+	if len(rawSites) > 0 {
+		symsDB, err := store.GetSymbolsByFileID(fileID)
+		if err != nil {
+			return 0, fmt.Errorf("get symbols for %s: %w", relPath, err)
+		}
+		sites := resolveCallSites(rawSites, symsDB, fileID)
+		if err := store.InsertCallSites(sites); err != nil {
+			return 0, fmt.Errorf("insert call sites for %s: %w", relPath, err)
+		}
+	}
+
 	return len(syms), nil
+}
+
+// resolveCallSites matches raw call sites (by line) to the enclosing symbol in syms.
+func resolveCallSites(raw []rawCallSite, syms []storage.Symbol, fileID int64) []storage.CallSite {
+	var sites []storage.CallSite
+	for _, r := range raw {
+		for _, sym := range syms {
+			if r.line >= sym.LineStart && r.line <= sym.LineEnd {
+				sites = append(sites, storage.CallSite{
+					CallerSymbolID: sym.ID,
+					CalleeName:     r.calleeName,
+					FileID:         fileID,
+					Line:           r.line,
+				})
+				break
+			}
+		}
+	}
+	return sites
 }
 
 // walkFunc walks a repo and calls fn for each source file.
@@ -341,6 +382,30 @@ func cppSymbols(in []cppindexer.Symbol) []storage.Symbol {
 			LineStart: int64(s.LineStart),
 			LineEnd:   int64(s.LineEnd),
 		}
+	}
+	return out
+}
+
+func goRawSites(in []goindexer.CallSite) []rawCallSite {
+	out := make([]rawCallSite, len(in))
+	for i, cs := range in {
+		out[i] = rawCallSite{calleeName: cs.CalleeName, line: int64(cs.Line)}
+	}
+	return out
+}
+
+func cRawSites(in []cindexer.CallSite) []rawCallSite {
+	out := make([]rawCallSite, len(in))
+	for i, cs := range in {
+		out[i] = rawCallSite{calleeName: cs.CalleeName, line: int64(cs.Line)}
+	}
+	return out
+}
+
+func cppRawSites(in []cppindexer.CallSite) []rawCallSite {
+	out := make([]rawCallSite, len(in))
+	for i, cs := range in {
+		out[i] = rawCallSite{calleeName: cs.CalleeName, line: int64(cs.Line)}
 	}
 	return out
 }

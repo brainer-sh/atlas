@@ -65,6 +65,17 @@ CREATE TABLE IF NOT EXISTS symbols_embeddings (
     symbol_id INTEGER PRIMARY KEY REFERENCES symbols(id),
     embedding BLOB NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS call_sites (
+    id               INTEGER PRIMARY KEY,
+    caller_symbol_id INTEGER NOT NULL REFERENCES symbols(id),
+    callee_name      TEXT NOT NULL,
+    file_id          INTEGER NOT NULL REFERENCES files(id),
+    line             INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS call_sites_caller ON call_sites(caller_symbol_id);
+CREATE INDEX IF NOT EXISTS call_sites_callee ON call_sites(callee_name);
 `
 
 // Store handles all database operations for Atlas.

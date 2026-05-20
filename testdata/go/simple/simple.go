@@ -21,3 +21,8 @@ type Sayer interface {
 func Add(a, b int) int {
 	return a + b
 }
+
+// Run demonstrates Add.
+func Run() int {
+	return Add(1, 2)
+}

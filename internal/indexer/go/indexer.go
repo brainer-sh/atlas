@@ -14,6 +14,9 @@ import (
 //go:embed queries/symbols.scm
 var symbolsQuery string
 
+//go:embed queries/call_sites.scm
+var callSitesQueryStr string
+
 // Symbol represents an extracted code symbol.
 type Symbol struct {
 	Name      string
@@ -24,17 +27,25 @@ type Symbol struct {
 	LineEnd   uint
 }
 
+// CallSite represents a function or method call found in source.
+type CallSite struct {
+	CalleeName string
+	Line       uint
+}
+
 // FileIndex holds all extracted information from a single Go source file.
 type FileIndex struct {
-	Package string
-	Imports []string
-	Symbols []Symbol
+	Package   string
+	Imports   []string
+	Symbols   []Symbol
+	CallSites []CallSite
 }
 
 // Indexer parses Go source files and extracts symbols using tree-sitter.
 type Indexer struct {
-	parser *sitter.Parser
-	query  *sitter.Query
+	parser         *sitter.Parser
+	query          *sitter.Query
+	callSitesQuery *sitter.Query
 }
 
 // New creates a new Go Indexer.
@@ -51,11 +62,18 @@ func New() (*Indexer, error) {
 		return nil, fmt.Errorf("indexer/go: compile query: %w", qErr)
 	}
 
-	return &Indexer{parser: parser, query: query}, nil
+	csQuery, csErr := sitter.NewQuery(lang, callSitesQueryStr)
+	if csErr != nil {
+		query.Close()
+		return nil, fmt.Errorf("indexer/go: compile call sites query: %w", csErr)
+	}
+
+	return &Indexer{parser: parser, query: query, callSitesQuery: csQuery}, nil
 }
 
 // Close releases resources held by the Indexer.
 func (idx *Indexer) Close() {
+	idx.callSitesQuery.Close()
 	idx.query.Close()
 	idx.parser.Close()
 }
@@ -76,9 +94,10 @@ func (idx *Indexer) IndexSource(src []byte) (*FileIndex, error) {
 	root := tree.RootNode()
 
 	return &FileIndex{
-		Package: extractPackage(root, src),
-		Imports: extractImports(root, src),
-		Symbols: idx.extractSymbols(root, src),
+		Package:   extractPackage(root, src),
+		Imports:   extractImports(root, src),
+		Symbols:   idx.extractSymbols(root, src),
+		CallSites: idx.extractCallSites(root, src),
 	}, nil
 }
 
@@ -166,6 +185,34 @@ func (idx *Indexer) extractSymbols(root *sitter.Node, src []byte) []Symbol {
 	}
 
 	return symbols
+}
+
+func (idx *Indexer) extractCallSites(root *sitter.Node, src []byte) []CallSite {
+	cursor := sitter.NewQueryCursor()
+	defer cursor.Close()
+
+	matches := cursor.Matches(idx.callSitesQuery, root, src)
+	captureNames := idx.callSitesQuery.CaptureNames()
+
+	var sites []CallSite
+	for {
+		match := matches.Next()
+		if match == nil {
+			break
+		}
+		for i := range match.Captures {
+			cap := match.Captures[i]
+			if captureNames[cap.Index] != "callee.name" {
+				continue
+			}
+			node := cap.Node
+			sites = append(sites, CallSite{
+				CalleeName: node.Utf8Text(src),
+				Line:       node.StartPosition().Row + 1,
+			})
+		}
+	}
+	return sites
 }
 
 func buildSignature(node *sitter.Node, src []byte) string {
